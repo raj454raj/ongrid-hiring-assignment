@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   BarChart,
   Bar,
@@ -59,9 +59,9 @@ function App() {
     try {
       const r = await fetch(`${API}/reports/monthly-trend`);
       const data = await r.json();
-      const series = data.monthly_series.map((row) => ({
-        month: row.month,
-        total: row.total,
+      const series = (data.trend_rows || []).map((row) => ({
+        month: row.period,
+        total: row.spend,
       }));
       setTrendData(series);
     } catch (e) {
@@ -133,8 +133,8 @@ function App() {
     loadTrend();
   };
 
-  const pageTotal = expenses.reduce((a, e) => a + e.amount, 0);
-  const totalPages = Math.max(1, Math.floor(total / perPage));
+  const pageTotal = expenses.reduce((a, e) => a + parseFloat(e.amount || 0), 0);
+  const totalPages = Math.ceil(total / perPage) || 1;
 
   return (
     <>
@@ -253,7 +253,7 @@ function App() {
               <Tooltip
                 contentStyle={{ background: "#1a1f26", border: "1px solid #38444d" }}
               />
-              <Bar dataKey="value" fill="#1d9bf0" name="Total" />
+              <Bar dataKey="amt" fill="#1d9bf0" name="Total" />
             </BarChart>
           </ResponsiveContainer>
         </div>

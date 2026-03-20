@@ -1,6 +1,7 @@
 """
 Expense Tracker API — Flask + MySQL.
 """
+import os
 from datetime import datetime, date
 from calendar import monthrange
 
@@ -43,6 +44,16 @@ def create_app():
         c = Category.query.get(cid)
         if not c:
             return jsonify({"error": "not found"}), 404
+        # Instead of deleting the category, we could soft delete it if we had an is_deleted flag.
+        # But since the requirement is to fix bugs, let's at least mark expenses as deleted
+        # or handle the foreign key constraint. Pymysql will throw error if enforced.
+        # A better approach is to prevent deletion if expenses exist OR soft delete category.
+        # Let's check for active expenses.
+        active_expenses = Expense.query.filter_by(category_id=cid, is_deleted=0).count()
+        if active_expenses > 0:
+            return jsonify({"error": "Cannot delete category with active expenses"}), 400
+        
+        # Soft delete related expenses just in case
         Expense.query.filter_by(category_id=cid).update({"is_deleted": 1})
         db.session.delete(c)
         db.session.commit()
@@ -52,10 +63,10 @@ def create_app():
     def list_expenses():
         page = int(request.args.get("page", 1))
         per_page = min(int(request.args.get("per_page", 10)), 50)
-        offset = page * per_page
-        q = Expense.query
+        offset = (page - 1) * per_page
+        q = Expense.query.filter_by(is_deleted=0)
         rows = q.order_by(Expense.expense_date.desc(), Expense.id.desc()).offset(offset).limit(per_page).all()
-        total = Expense.query.count()
+        total = Expense.query.filter_by(is_deleted=0).count()
         return jsonify(
             {
                 "items": [
@@ -84,13 +95,27 @@ def create_app():
         expense_date = data.get("expense_date")
         if category_id is None or amount is None or not expense_date:
             return jsonify({"error": "category_id, amount, expense_date required"}), 400
-        if not Category.query.get(int(category_id)):
+        try:
+            cat_id_int = int(str(category_id))
+        except (ValueError, TypeError):
+            return jsonify({"error": "invalid category_id"}), 400
+
+        if not Category.query.get(cat_id_int):
             return jsonify({"error": "invalid category"}), 400
+
+        expense_date_str = str(expense_date)
+        try:
+            # Use partition instead of slice to avoid IDE "Cannot index into str" errors
+            date_part = expense_date_str.partition('T')[0].partition(' ')[0]
+            parsed_date = datetime.strptime(date_part, "%Y-%m-%d").date()
+        except ValueError:
+            return jsonify({"error": "invalid date format, use YYYY-MM-DD"}), 400
+
         e = Expense(
-            category_id=int(category_id),
+            category_id=cat_id_int,
             amount=str(amount),
-            description=str(description)[:512],
-            expense_date=datetime.strptime(expense_date[:10], "%Y-%m-%d").date(),
+            description=str(description or ""),
+            expense_date=parsed_date,
         )
         db.session.add(e)
         db.session.commit()
@@ -137,8 +162,14 @@ def create_app():
         for e in active:
             key = e.category_id
             if key not in by_cat:
-                by_cat[key] = {"category_id": key, "category_name": e.category.name if e.category else "", "total": 0.0}
-            by_cat[key]["total"] += float(e.amount)
+                by_cat[key] = {
+                    "category_id": key,
+                    "category_name": e.category.name if e.category else "",
+                    "total": 0.0
+                }
+            # Explicitly cast to float to avoid type-check confusion
+            amount_val = float(e.amount or 0)
+            by_cat[key]["total"] = float(by_cat[key]["total"]) + amount_val
         series = [
             {"category_name": v["category_name"], "total": v["total"]}
             for v in by_cat.values()
@@ -177,4 +208,5 @@ def create_app():
 app = create_app()
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5001, debug=True)
+    port = int(os.environ.get("PORT", 5001))
+    app.run(host="0.0.0.0", port=port, debug=True)
