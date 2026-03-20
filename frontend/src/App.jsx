@@ -32,36 +32,66 @@ function App() {
   const [msg, setMsg] = useState("");
 
   const loadCategories = useCallback(async () => {
-    const r = await fetch(`${API}/categories`);
-    const data = await r.json();
-    setCategories(Array.isArray(data) ? data : []);
+    try {
+      const r = await fetch(`${API}/categories`);
+      if (!r.ok) {
+        throw new Error("Failed to load categories");
+      }
+      const data = await r.json();
+      setCategories(Array.isArray(data) ? data : []);
+    } catch (e) {
+      setCategories([]);
+      setMsg(String(e.message || e));
+    }
   }, []);
 
   const loadExpenses = useCallback(async () => {
-    const r = await fetch(
-      `${API}/expenses?page=${page}&per_page=${perPage}`
-    );
-    const data = await r.json();
-    setExpenses(data.items || []);
-    setTotal(data.total || 0);
+    try {
+      const r = await fetch(
+        `${API}/expenses?page=${page}&per_page=${perPage}`
+      );
+      if (!r.ok) {
+        const j = await r.json().catch(() => ({}));
+        throw new Error(j.error || "Failed to load expenses");
+      }
+      const data = await r.json();
+      setExpenses(data.items || []);
+      setTotal(data.total || 0);
+    } catch (e) {
+      setExpenses([]);
+      setTotal(0);
+      setMsg(String(e.message || e));
+    }
   }, [page, perPage]);
 
   const loadMonthlyReport = useCallback(async () => {
-    const r = await fetch(
-      `${API}/reports/monthly?year=${year}&month=${month}`
-    );
-    const data = await r.json();
-    setMonthlyByCat(data.category_totals_for_chart || []);
+    try {
+      const r = await fetch(
+        `${API}/reports/monthly?year=${year}&month=${month}`
+      );
+      if (!r.ok) {
+        const j = await r.json().catch(() => ({}));
+        throw new Error(j.error || "Failed to load monthly report");
+      }
+      const data = await r.json();
+      setMonthlyByCat(data.category_totals_for_chart || []);
+    } catch (e) {
+      setMonthlyByCat([]);
+      setMsg(String(e.message || e));
+    }
   }, [year, month]);
 
   const loadTrend = useCallback(async () => {
     setChartError(null);
     try {
       const r = await fetch(`${API}/reports/monthly-trend`);
+      if (!r.ok) {
+        throw new Error("Failed to load trend");
+      }
       const data = await r.json();
-      const series = data.monthly_series.map((row) => ({
-        month: row.month,
-        total: row.total,
+      const series = (data.trend_rows || []).map((row) => ({
+        period: row.period,
+        spend: row.spend,
       }));
       setTrendData(series);
     } catch (e) {
@@ -102,6 +132,10 @@ function App() {
   const addExpense = async (e) => {
     e.preventDefault();
     setMsg("");
+    if (!form.category_id) {
+      setMsg("Please select a category");
+      return;
+    }
     const dateStr =
       form.expense_date ||
       new Date().toISOString().slice(0, 10);
@@ -116,7 +150,7 @@ function App() {
       }),
     });
     if (r.ok) {
-      setForm((f) => ({ ...f, amount: "", description: "" }));
+      setForm({ category_id: "", amount: "", description: "", expense_date: "" });
       loadExpenses();
       loadMonthlyReport();
       loadTrend();
@@ -127,14 +161,22 @@ function App() {
   };
 
   const removeExpense = async (id) => {
-    await fetch(`${API}/expenses/${id}`, { method: "DELETE" });
+    const r = await fetch(`${API}/expenses/${id}`, { method: "DELETE" });
+    if (!r.ok) {
+      const j = await r.json().catch(() => ({}));
+      setMsg(j.error || "Failed to delete expense");
+      return;
+    }
+    setMsg("");
     loadExpenses();
     loadMonthlyReport();
     loadTrend();
   };
 
-  const pageTotal = expenses.reduce((a, e) => a + e.amount, 0);
-  const totalPages = Math.max(1, Math.floor(total / perPage));
+  const pageTotal = expenses
+    .reduce((a, e) => a + parseFloat(e.amount || 0), 0)
+    .toFixed(2);
+  const totalPages = Math.max(1, Math.ceil(total / perPage));
 
   return (
     <>
@@ -242,7 +284,7 @@ function App() {
           </div>
         </div>
         <p className="muted">
-          Sum on this page (strings): <strong>{String(pageTotal)}</strong>
+          Sum on this page: <strong>{pageTotal}</strong>
         </p>
         <div className="chart-wrap">
           <ResponsiveContainer width="100%" height="100%">
@@ -253,7 +295,7 @@ function App() {
               <Tooltip
                 contentStyle={{ background: "#1a1f26", border: "1px solid #38444d" }}
               />
-              <Bar dataKey="value" fill="#1d9bf0" name="Total" />
+              <Bar dataKey="amt" fill="#1d9bf0" name="Total" />
             </BarChart>
           </ResponsiveContainer>
         </div>
@@ -267,12 +309,12 @@ function App() {
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={trendData} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#38444d" />
-                <XAxis dataKey="month" stroke="#8b98a5" />
+                <XAxis dataKey="period" stroke="#8b98a5" />
                 <YAxis stroke="#8b98a5" />
                 <Tooltip
                   contentStyle={{ background: "#1a1f26", border: "1px solid #38444d" }}
                 />
-                <Bar dataKey="total" fill="#7856ff" name="Spend" />
+                <Bar dataKey="spend" fill="#7856ff" name="Spend" />
               </BarChart>
             </ResponsiveContainer>
           </div>
