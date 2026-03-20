@@ -1,0 +1,312 @@
+diff --git a/backend/app.py b/backend/app.py
+index 0637e9e..5c78c0f 100644
+--- a/backend/app.py
++++ b/backend/app.py
+@@ -11,6 +11,18 @@ from config import Config
+ from models import db, Category, Expense
+ 
+ 
++def _parse_pagination_args():
++    page = request.args.get("page", default=1, type=int)
++    per_page = request.args.get("per_page", default=10, type=int)
++    if page is None or per_page is None:
++        return None, None, (jsonify({"error": "page and per_page must be integers"}), 400)
++    if page < 1:
++        return None, None, (jsonify({"error": "page must be >= 1"}), 400)
++    if per_page < 1 or per_page > 50:
++        return None, None, (jsonify({"error": "per_page must be between 1 and 50"}), 400)
++    return page, per_page, None
++
++
+ def create_app():
+     app = Flask(__name__)
+     app.config.from_object(Config)
+@@ -43,19 +55,23 @@ def create_app():
+         c = Category.query.get(cid)
+         if not c:
+             return jsonify({"error": "not found"}), 404
+-        Expense.query.filter_by(category_id=cid).update({"is_deleted": 1})
++        Expense.query.filter_by(category_id=cid).update(
++            {"is_deleted": 1, "category_id": None},
++            synchronize_session=False,
++        )
+         db.session.delete(c)
+         db.session.commit()
+         return jsonify({"ok": True})
+ 
+     @app.route("/api/expenses", methods=["GET"])
+     def list_expenses():
+-        page = int(request.args.get("page", 1))
+-        per_page = min(int(request.args.get("per_page", 10)), 50)
+-        offset = page * per_page
+-        q = Expense.query
++        page, per_page, err = _parse_pagination_args()
++        if err:
++            return err
++        offset = (page - 1) * per_page
++        q = Expense.query.filter(Expense.is_deleted == 0)
+         rows = q.order_by(Expense.expense_date.desc(), Expense.id.desc()).offset(offset).limit(per_page).all()
+-        total = Expense.query.count()
++        total = q.count()
+         return jsonify(
+             {
+                 "items": [
+@@ -84,13 +100,27 @@ def create_app():
+         expense_date = data.get("expense_date")
+         if category_id is None or amount is None or not expense_date:
+             return jsonify({"error": "category_id, amount, expense_date required"}), 400
+-        if not Category.query.get(int(category_id)):
++        try:
++            category_id = int(category_id)
++        except (TypeError, ValueError):
++            return jsonify({"error": "invalid category"}), 400
++        if not Category.query.get(category_id):
+             return jsonify({"error": "invalid category"}), 400
++        try:
++            amount_num = float(amount)
++        except (TypeError, ValueError):
++            return jsonify({"error": "invalid amount"}), 400
++        if amount_num <= 0:
++            return jsonify({"error": "amount must be > 0"}), 400
++        try:
++            parsed_date = datetime.strptime(str(expense_date)[:10], "%Y-%m-%d").date()
++        except (TypeError, ValueError):
++            return jsonify({"error": "invalid expense_date"}), 400
+         e = Expense(
+-            category_id=int(category_id),
+-            amount=str(amount),
++            category_id=category_id,
++            amount=f"{amount_num:.2f}",
+             description=str(description)[:512],
+-            expense_date=datetime.strptime(expense_date[:10], "%Y-%m-%d").date(),
++            expense_date=parsed_date,
+         )
+         db.session.add(e)
+         db.session.commit()
+@@ -110,7 +140,7 @@ def create_app():
+     @app.route("/api/expenses/<int:eid>", methods=["DELETE"])
+     def delete_expense(eid):
+         e = Expense.query.get(eid)
+-        if not e:
++        if not e or e.is_deleted == 1:
+             return jsonify({"error": "not found"}), 404
+         e.is_deleted = 1
+         db.session.commit()
+@@ -125,6 +155,10 @@ def create_app():
+             year = today.year
+         if month is None:
+             month = today.month
++        if month < 1 or month > 12:
++            return jsonify({"error": "month must be between 1 and 12"}), 400
++        if year < 1900 or year > 3000:
++            return jsonify({"error": "year out of allowed range"}), 400
+         start = date(year, month, 1)
+         last_day = monthrange(year, month)[1]
+         end = date(year, month, last_day)
+@@ -136,6 +170,8 @@ def create_app():
+         by_cat = {}
+         for e in active:
+             key = e.category_id
++            if key is None:
++                continue
+             if key not in by_cat:
+                 by_cat[key] = {"category_id": key, "category_name": e.category.name if e.category else "", "total": 0.0}
+             by_cat[key]["total"] += float(e.amount)
+diff --git a/backend/models.py b/backend/models.py
+index f985ebb..d637df3 100644
+--- a/backend/models.py
++++ b/backend/models.py
+@@ -14,7 +14,7 @@ class Category(db.Model):
+ class Expense(db.Model):
+     __tablename__ = "expense"
+     id = db.Column(db.Integer, primary_key=True)
+-    category_id = db.Column(db.Integer, db.ForeignKey("category.id"), nullable=False)
++    category_id = db.Column(db.Integer, db.ForeignKey("category.id"), nullable=True)
+     amount = db.Column(db.String(32), nullable=False)
+     description = db.Column(db.String(512), default="")
+     expense_date = db.Column(db.Date, nullable=False)
+diff --git a/backend/schema.sql b/backend/schema.sql
+index 27605d0..1d62671 100644
+--- a/backend/schema.sql
++++ b/backend/schema.sql
+@@ -9,11 +9,11 @@ CREATE TABLE IF NOT EXISTS category (
+ 
+ CREATE TABLE IF NOT EXISTS expense (
+   id INT AUTO_INCREMENT PRIMARY KEY,
+-  category_id INT NOT NULL,
++  category_id INT NULL,
+   amount VARCHAR(32) NOT NULL,
+   description VARCHAR(512) DEFAULT '',
+   expense_date DATE NOT NULL,
+   is_deleted TINYINT(1) DEFAULT 0,
+   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+-  FOREIGN KEY (category_id) REFERENCES category(id)
++  FOREIGN KEY (category_id) REFERENCES category(id) ON DELETE SET NULL
+ );
+diff --git a/frontend/src/App.jsx b/frontend/src/App.jsx
+index d133364..bb49865 100644
+--- a/frontend/src/App.jsx
++++ b/frontend/src/App.jsx
+@@ -32,36 +32,66 @@ function App() {
+   const [msg, setMsg] = useState("");
+ 
+   const loadCategories = useCallback(async () => {
+-    const r = await fetch(`${API}/categories`);
+-    const data = await r.json();
+-    setCategories(Array.isArray(data) ? data : []);
++    try {
++      const r = await fetch(`${API}/categories`);
++      if (!r.ok) {
++        throw new Error("Failed to load categories");
++      }
++      const data = await r.json();
++      setCategories(Array.isArray(data) ? data : []);
++    } catch (e) {
++      setCategories([]);
++      setMsg(String(e.message || e));
++    }
+   }, []);
+ 
+   const loadExpenses = useCallback(async () => {
+-    const r = await fetch(
+-      `${API}/expenses?page=${page}&per_page=${perPage}`
+-    );
+-    const data = await r.json();
+-    setExpenses(data.items || []);
+-    setTotal(data.total || 0);
++    try {
++      const r = await fetch(
++        `${API}/expenses?page=${page}&per_page=${perPage}`
++      );
++      if (!r.ok) {
++        const j = await r.json().catch(() => ({}));
++        throw new Error(j.error || "Failed to load expenses");
++      }
++      const data = await r.json();
++      setExpenses(data.items || []);
++      setTotal(data.total || 0);
++    } catch (e) {
++      setExpenses([]);
++      setTotal(0);
++      setMsg(String(e.message || e));
++    }
+   }, [page, perPage]);
+ 
+   const loadMonthlyReport = useCallback(async () => {
+-    const r = await fetch(
+-      `${API}/reports/monthly?year=${year}&month=${month}`
+-    );
+-    const data = await r.json();
+-    setMonthlyByCat(data.category_totals_for_chart || []);
++    try {
++      const r = await fetch(
++        `${API}/reports/monthly?year=${year}&month=${month}`
++      );
++      if (!r.ok) {
++        const j = await r.json().catch(() => ({}));
++        throw new Error(j.error || "Failed to load monthly report");
++      }
++      const data = await r.json();
++      setMonthlyByCat(data.category_totals_for_chart || []);
++    } catch (e) {
++      setMonthlyByCat([]);
++      setMsg(String(e.message || e));
++    }
+   }, [year, month]);
+ 
+   const loadTrend = useCallback(async () => {
+     setChartError(null);
+     try {
+       const r = await fetch(`${API}/reports/monthly-trend`);
++      if (!r.ok) {
++        throw new Error("Failed to load trend");
++      }
+       const data = await r.json();
+-      const series = data.monthly_series.map((row) => ({
+-        month: row.month,
+-        total: row.total,
++      const series = (data.trend_rows || []).map((row) => ({
++        period: row.period,
++        spend: row.spend,
+       }));
+       setTrendData(series);
+     } catch (e) {
+@@ -102,6 +132,10 @@ function App() {
+   const addExpense = async (e) => {
+     e.preventDefault();
+     setMsg("");
++    if (!form.category_id) {
++      setMsg("Please select a category");
++      return;
++    }
+     const dateStr =
+       form.expense_date ||
+       new Date().toISOString().slice(0, 10);
+@@ -116,7 +150,7 @@ function App() {
+       }),
+     });
+     if (r.ok) {
+-      setForm((f) => ({ ...f, amount: "", description: "" }));
++      setForm({ category_id: "", amount: "", description: "", expense_date: "" });
+       loadExpenses();
+       loadMonthlyReport();
+       loadTrend();
+@@ -127,14 +161,22 @@ function App() {
+   };
+ 
+   const removeExpense = async (id) => {
+-    await fetch(`${API}/expenses/${id}`, { method: "DELETE" });
++    const r = await fetch(`${API}/expenses/${id}`, { method: "DELETE" });
++    if (!r.ok) {
++      const j = await r.json().catch(() => ({}));
++      setMsg(j.error || "Failed to delete expense");
++      return;
++    }
++    setMsg("");
+     loadExpenses();
+     loadMonthlyReport();
+     loadTrend();
+   };
+ 
+-  const pageTotal = expenses.reduce((a, e) => a + e.amount, 0);
+-  const totalPages = Math.max(1, Math.floor(total / perPage));
++  const pageTotal = expenses
++    .reduce((a, e) => a + parseFloat(e.amount || 0), 0)
++    .toFixed(2);
++  const totalPages = Math.max(1, Math.ceil(total / perPage));
+ 
+   return (
+     <>
+@@ -242,7 +284,7 @@ function App() {
+           </div>
+         </div>
+         <p className="muted">
+-          Sum on this page (strings): <strong>{String(pageTotal)}</strong>
++          Sum on this page: <strong>{pageTotal}</strong>
+         </p>
+         <div className="chart-wrap">
+           <ResponsiveContainer width="100%" height="100%">
+@@ -253,7 +295,7 @@ function App() {
+               <Tooltip
+                 contentStyle={{ background: "#1a1f26", border: "1px solid #38444d" }}
+               />
+-              <Bar dataKey="value" fill="#1d9bf0" name="Total" />
++              <Bar dataKey="amt" fill="#1d9bf0" name="Total" />
+             </BarChart>
+           </ResponsiveContainer>
+         </div>
+@@ -267,12 +309,12 @@ function App() {
+             <ResponsiveContainer width="100%" height="100%">
+               <BarChart data={trendData} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
+                 <CartesianGrid strokeDasharray="3 3" stroke="#38444d" />
+-                <XAxis dataKey="month" stroke="#8b98a5" />
++                <XAxis dataKey="period" stroke="#8b98a5" />
+                 <YAxis stroke="#8b98a5" />
+                 <Tooltip
+                   contentStyle={{ background: "#1a1f26", border: "1px solid #38444d" }}
+                 />
+-                <Bar dataKey="total" fill="#7856ff" name="Spend" />
++                <Bar dataKey="spend" fill="#7856ff" name="Spend" />
+               </BarChart>
+             </ResponsiveContainer>
+           </div>

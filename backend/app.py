@@ -11,6 +11,18 @@ from config import Config
 from models import db, Category, Expense
 
 
+def _parse_pagination_args():
+    page = request.args.get("page", default=1, type=int)
+    per_page = request.args.get("per_page", default=10, type=int)
+    if page is None or per_page is None:
+        return None, None, (jsonify({"error": "page and per_page must be integers"}), 400)
+    if page < 1:
+        return None, None, (jsonify({"error": "page must be >= 1"}), 400)
+    if per_page < 1 or per_page > 50:
+        return None, None, (jsonify({"error": "per_page must be between 1 and 50"}), 400)
+    return page, per_page, None
+
+
 def create_app():
     app = Flask(__name__)
     app.config.from_object(Config)
@@ -43,19 +55,23 @@ def create_app():
         c = Category.query.get(cid)
         if not c:
             return jsonify({"error": "not found"}), 404
-        Expense.query.filter_by(category_id=cid).update({"is_deleted": 1})
+        Expense.query.filter_by(category_id=cid).update(
+            {"is_deleted": 1, "category_id": None},
+            synchronize_session=False,
+        )
         db.session.delete(c)
         db.session.commit()
         return jsonify({"ok": True})
 
     @app.route("/api/expenses", methods=["GET"])
     def list_expenses():
-        page = int(request.args.get("page", 1))
-        per_page = min(int(request.args.get("per_page", 10)), 50)
-        offset = page * per_page
-        q = Expense.query
+        page, per_page, err = _parse_pagination_args()
+        if err:
+            return err
+        offset = (page - 1) * per_page
+        q = Expense.query.filter(Expense.is_deleted == 0)
         rows = q.order_by(Expense.expense_date.desc(), Expense.id.desc()).offset(offset).limit(per_page).all()
-        total = Expense.query.count()
+        total = q.count()
         return jsonify(
             {
                 "items": [
@@ -84,13 +100,27 @@ def create_app():
         expense_date = data.get("expense_date")
         if category_id is None or amount is None or not expense_date:
             return jsonify({"error": "category_id, amount, expense_date required"}), 400
-        if not Category.query.get(int(category_id)):
+        try:
+            category_id = int(category_id)
+        except (TypeError, ValueError):
             return jsonify({"error": "invalid category"}), 400
+        if not Category.query.get(category_id):
+            return jsonify({"error": "invalid category"}), 400
+        try:
+            amount_num = float(amount)
+        except (TypeError, ValueError):
+            return jsonify({"error": "invalid amount"}), 400
+        if amount_num <= 0:
+            return jsonify({"error": "amount must be > 0"}), 400
+        try:
+            parsed_date = datetime.strptime(str(expense_date)[:10], "%Y-%m-%d").date()
+        except (TypeError, ValueError):
+            return jsonify({"error": "invalid expense_date"}), 400
         e = Expense(
-            category_id=int(category_id),
-            amount=str(amount),
+            category_id=category_id,
+            amount=f"{amount_num:.2f}",
             description=str(description)[:512],
-            expense_date=datetime.strptime(expense_date[:10], "%Y-%m-%d").date(),
+            expense_date=parsed_date,
         )
         db.session.add(e)
         db.session.commit()
@@ -110,7 +140,7 @@ def create_app():
     @app.route("/api/expenses/<int:eid>", methods=["DELETE"])
     def delete_expense(eid):
         e = Expense.query.get(eid)
-        if not e:
+        if not e or e.is_deleted == 1:
             return jsonify({"error": "not found"}), 404
         e.is_deleted = 1
         db.session.commit()
@@ -125,6 +155,10 @@ def create_app():
             year = today.year
         if month is None:
             month = today.month
+        if month < 1 or month > 12:
+            return jsonify({"error": "month must be between 1 and 12"}), 400
+        if year < 1900 or year > 3000:
+            return jsonify({"error": "year out of allowed range"}), 400
         start = date(year, month, 1)
         last_day = monthrange(year, month)[1]
         end = date(year, month, last_day)
@@ -136,6 +170,8 @@ def create_app():
         by_cat = {}
         for e in active:
             key = e.category_id
+            if key is None:
+                continue
             if key not in by_cat:
                 by_cat[key] = {"category_id": key, "category_name": e.category.name if e.category else "", "total": 0.0}
             by_cat[key]["total"] += float(e.amount)
