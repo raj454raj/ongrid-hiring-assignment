@@ -59,9 +59,10 @@ function App() {
     try {
       const r = await fetch(`${API}/reports/monthly-trend`);
       const data = await r.json();
-      const series = data.monthly_series.map((row) => ({
-        month: row.month,
-        total: row.total,
+      // BUG FIX: backend returns trend_rows (not monthly_series), with period+spend fields
+      const series = (data.trend_rows || []).map((row) => ({
+        period: row.period,
+        spend: row.spend,
       }));
       setTrendData(series);
     } catch (e) {
@@ -102,6 +103,11 @@ function App() {
   const addExpense = async (e) => {
     e.preventDefault();
     setMsg("");
+    // BUG FIX: guard against submitting with no category selected
+    if (!form.category_id) {
+      setMsg("Please select a category");
+      return;
+    }
     const dateStr =
       form.expense_date ||
       new Date().toISOString().slice(0, 10);
@@ -116,7 +122,8 @@ function App() {
       }),
     });
     if (r.ok) {
-      setForm((f) => ({ ...f, amount: "", description: "" }));
+      // BUG FIX: reset entire form (including category_id and expense_date) after success
+      setForm({ category_id: "", amount: "", description: "", expense_date: "" });
       loadExpenses();
       loadMonthlyReport();
       loadTrend();
@@ -133,8 +140,10 @@ function App() {
     loadTrend();
   };
 
-  const pageTotal = expenses.reduce((a, e) => a + e.amount, 0);
-  const totalPages = Math.max(1, Math.floor(total / perPage));
+  // BUG FIX: e.amount is a string from API — parse to float before summing
+  const pageTotal = expenses.reduce((a, e) => a + parseFloat(e.amount || 0), 0).toFixed(2);
+  // BUG FIX: Math.floor cuts off last page — use Math.ceil
+  const totalPages = Math.max(1, Math.ceil(total / perPage));
 
   return (
     <>
@@ -241,8 +250,9 @@ function App() {
             />
           </div>
         </div>
+        {/* BUG FIX: removed stale '(strings)' label - sum is now a proper decimal number */}
         <p className="muted">
-          Sum on this page (strings): <strong>{String(pageTotal)}</strong>
+          Total this page: <strong>{pageTotal}</strong>
         </p>
         <div className="chart-wrap">
           <ResponsiveContainer width="100%" height="100%">
@@ -253,7 +263,8 @@ function App() {
               <Tooltip
                 contentStyle={{ background: "#1a1f26", border: "1px solid #38444d" }}
               />
-              <Bar dataKey="value" fill="#1d9bf0" name="Total" />
+              {/* BUG FIX: backend returns 'amt' not 'value' */}
+              <Bar dataKey="amt" fill="#1d9bf0" name="Total" />
             </BarChart>
           </ResponsiveContainer>
         </div>
@@ -267,12 +278,14 @@ function App() {
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={trendData} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#38444d" />
-                <XAxis dataKey="month" stroke="#8b98a5" />
+                {/* BUG FIX: backend returns 'period' not 'month' */}
+                <XAxis dataKey="period" stroke="#8b98a5" />
                 <YAxis stroke="#8b98a5" />
                 <Tooltip
                   contentStyle={{ background: "#1a1f26", border: "1px solid #38444d" }}
                 />
-                <Bar dataKey="total" fill="#7856ff" name="Spend" />
+                {/* BUG FIX: backend returns 'spend' not 'total' */}
+                <Bar dataKey="spend" fill="#7856ff" name="Spend" />
               </BarChart>
             </ResponsiveContainer>
           </div>

@@ -9,11 +9,13 @@ CREATE TABLE IF NOT EXISTS category (
 
 CREATE TABLE IF NOT EXISTS expense (
   id INT AUTO_INCREMENT PRIMARY KEY,
-  category_id INT NOT NULL,
+  -- BUG FIX: category_id must be nullable (ON DELETE SET NULL) so deleting a category
+  -- doesn't violate FK constraint. Matches models.py nullable=True fix.
+  category_id INT NULL,
   amount VARCHAR(32) NOT NULL,
   description VARCHAR(512) DEFAULT '',
   expense_date DATE NOT NULL,
   is_deleted TINYINT(1) DEFAULT 0,
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-  FOREIGN KEY (category_id) REFERENCES category(id)
+  FOREIGN KEY (category_id) REFERENCES category(id) ON DELETE SET NULL
 );
