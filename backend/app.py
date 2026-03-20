@@ -43,7 +43,8 @@ def create_app():
         c = Category.query.get(cid)
         if not c:
             return jsonify({"error": "not found"}), 404
-        Expense.query.filter_by(category_id=cid).update({"is_deleted": 1})
+        # BUG FIX: null out category_id before deleting category to avoid FK constraint error
+        Expense.query.filter_by(category_id=cid).update({"is_deleted": 1, "category_id": None})
         db.session.delete(c)
         db.session.commit()
         return jsonify({"ok": True})
@@ -52,10 +53,10 @@ def create_app():
     def list_expenses():
         page = int(request.args.get("page", 1))
         per_page = min(int(request.args.get("per_page", 10)), 50)
-        offset = page * per_page
-        q = Expense.query
+        offset = (page - 1) * per_page  # BUG FIX: was page * per_page, skipped first page
+        q = Expense.query.filter(Expense.is_deleted == 0)  # BUG FIX: was not filtering soft-deleted
         rows = q.order_by(Expense.expense_date.desc(), Expense.id.desc()).offset(offset).limit(per_page).all()
-        total = Expense.query.count()
+        total = Expense.query.filter(Expense.is_deleted == 0).count()  # BUG FIX: count only active
         return jsonify(
             {
                 "items": [
@@ -84,6 +85,13 @@ def create_app():
         expense_date = data.get("expense_date")
         if category_id is None or amount is None or not expense_date:
             return jsonify({"error": "category_id, amount, expense_date required"}), 400
+        # BUG FIX: validate amount is a positive number
+        try:
+            amount = float(amount)
+            if amount <= 0:
+                raise ValueError
+        except (TypeError, ValueError):
+            return jsonify({"error": "amount must be a positive number"}), 400
         if not Category.query.get(int(category_id)):
             return jsonify({"error": "invalid category"}), 400
         e = Expense(
@@ -112,6 +120,9 @@ def create_app():
         e = Expense.query.get(eid)
         if not e:
             return jsonify({"error": "not found"}), 404
+        # BUG FIX: already-deleted expense should not silently succeed
+        if e.is_deleted == 1:
+            return jsonify({"error": "already deleted"}), 404
         e.is_deleted = 1
         db.session.commit()
         return jsonify({"ok": True})
@@ -136,6 +147,9 @@ def create_app():
         by_cat = {}
         for e in active:
             key = e.category_id
+            # BUG FIX: skip orphaned expenses (category was deleted)
+            if key is None:
+                continue
             if key not in by_cat:
                 by_cat[key] = {"category_id": key, "category_name": e.category.name if e.category else "", "total": 0.0}
             by_cat[key]["total"] += float(e.amount)

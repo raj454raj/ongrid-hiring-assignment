@@ -14,7 +14,8 @@ class Category(db.Model):
 class Expense(db.Model):
     __tablename__ = "expense"
     id = db.Column(db.Integer, primary_key=True)
-    category_id = db.Column(db.Integer, db.ForeignKey("category.id"), nullable=False)
+    # BUG FIX: nullable=True so expenses can be orphaned when category is deleted
+    category_id = db.Column(db.Integer, db.ForeignKey("category.id"), nullable=True)
     amount = db.Column(db.String(32), nullable=False)
     description = db.Column(db.String(512), default="")
     expense_date = db.Column(db.Date, nullable=False)
