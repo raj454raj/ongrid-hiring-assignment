@@ -21,3 +21,5 @@ Setup details are intentionally minimal — get the backend and frontend running
 - **frontend/** — React application  
 
 Setup the database and environment variables to connect.
+
+## 👉 [Major fixes](FIXES.md)
