@@ -1,4 +1,3 @@
-<<<<<<< HEAD
 ## Backend Fixes (app.py, models.py)
 
 1. 	offset = page * per_page - was skipping page 1 entirely (due to offset 10)
@@ -46,4 +45,3 @@
 
 ![1](static/1.png)
 ![2](static/2.png)
->>>>>>> 33b52b7 (Basic readme changes)
