@@ -32,18 +32,28 @@ function App() {
   const [msg, setMsg] = useState("");
 
   const loadCategories = useCallback(async () => {
-    const r = await fetch(`${API}/categories`);
-    const data = await r.json();
-    setCategories(Array.isArray(data) ? data : []);
+    try {
+      const r = await fetch(`${API}/categories`);
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const data = await r.json();
+      setCategories(Array.isArray(data) ? data : []);
+    } catch (e) {
+      setMsg(`Failed to load categories: ${e.message}`);
+    }
   }, []);
 
   const loadExpenses = useCallback(async () => {
-    const r = await fetch(
-      `${API}/expenses?page=${page}&per_page=${perPage}`
-    );
-    const data = await r.json();
-    setExpenses(data.items || []);
-    setTotal(data.total || 0);
+    try {
+      const r = await fetch(
+        `${API}/expenses?page=${page}&per_page=${perPage}`
+      );
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const data = await r.json();
+      setExpenses(data.items || []);
+      setTotal(data.total || 0);
+    } catch (e) {
+      setMsg(`Failed to load expenses: ${e.message}`);
+    }
   }, [page, perPage]);
 
   const loadMonthlyReport = useCallback(async () => {
@@ -59,9 +69,9 @@ function App() {
     try {
       const r = await fetch(`${API}/reports/monthly-trend`);
       const data = await r.json();
-      const series = data.monthly_series.map((row) => ({
-        month: row.month,
-        total: row.total,
+      const series = (data.trend_rows || []).map((row) => ({
+        month: row.period,
+        total: row.spend,
       }));
       setTrendData(series);
     } catch (e) {
@@ -133,7 +143,7 @@ function App() {
     loadTrend();
   };
 
-  const pageTotal = expenses.reduce((a, e) => a + e.amount, 0);
+  const pageTotal = expenses.reduce((a, e) => a + Number(e.amount || 0), 0);
   const totalPages = Math.max(1, Math.floor(total / perPage));
 
   return (
@@ -253,7 +263,7 @@ function App() {
               <Tooltip
                 contentStyle={{ background: "#1a1f26", border: "1px solid #38444d" }}
               />
-              <Bar dataKey="value" fill="#1d9bf0" name="Total" />
+              <Bar dataKey="amt" fill="#1d9bf0" name="Total" />
             </BarChart>
           </ResponsiveContainer>
         </div>

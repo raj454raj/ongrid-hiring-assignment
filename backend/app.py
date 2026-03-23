@@ -44,6 +44,7 @@ def create_app():
         if not c:
             return jsonify({"error": "not found"}), 404
         Expense.query.filter_by(category_id=cid).update({"is_deleted": 1})
+
         db.session.delete(c)
         db.session.commit()
         return jsonify({"ok": True})
@@ -52,10 +53,10 @@ def create_app():
     def list_expenses():
         page = int(request.args.get("page", 1))
         per_page = min(int(request.args.get("per_page", 10)), 50)
-        offset = page * per_page
-        q = Expense.query
+        offset = (page - 1) * per_page
+        q = Expense.query.filter(Expense.is_deleted == 0)
         rows = q.order_by(Expense.expense_date.desc(), Expense.id.desc()).offset(offset).limit(per_page).all()
-        total = Expense.query.count()
+        total = q.count()
         return jsonify(
             {
                 "items": [
@@ -84,11 +85,17 @@ def create_app():
         expense_date = data.get("expense_date")
         if category_id is None or amount is None or not expense_date:
             return jsonify({"error": "category_id, amount, expense_date required"}), 400
+        try:
+            amount_val = float(amount)
+            if amount_val <= 0:
+                raise ValueError("amount must be positive")
+        except (ValueError, TypeError):
+            return jsonify({"error": "amount must be a positive number"}), 400
         if not Category.query.get(int(category_id)):
             return jsonify({"error": "invalid category"}), 400
         e = Expense(
             category_id=int(category_id),
-            amount=str(amount),
+            amount=amount_val,
             description=str(description)[:512],
             expense_date=datetime.strptime(expense_date[:10], "%Y-%m-%d").date(),
         )
